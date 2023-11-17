@@ -4,19 +4,21 @@ cxxdebug = /Zi
 link = link.exe
 ldebug = /DEBUG
 
-all: setup clean lab03.exe
+all: setup clean lab03 lab05
 
 setup:
 	if not exist build mkdir build
 	del /Q build
 
 .cpp.obj:
-	echo $< $@ $*.cpp
 	$(cxx) $(cdebug) $(cflags) /c $*.cpp /Fo$@
 
-lab03.exe: 03lab\main.obj
+lab03: 03lab\main.obj
 	$(link) $(ldebug) -out:build\lab03.exe 03lab\main.obj
 
+lab05: 05lab\main.obj
+	$(link) $(ldebug) -out:build\lab05.exe 05lab\main.obj
+
 clean:
-	del /f 03lab\*.obj
+	del /f 03lab\*.obj 05lab\*.obj
 	del /Q build
