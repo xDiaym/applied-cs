@@ -1,11 +1,22 @@
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <ios>
 #include <iostream>
 #include <istream>
+#include <cassert>
+#include <stdexcept>
 
-enum TMRecordType { LONG = 0, DOUBLE, CODE, POINT };
+enum TMRecordType : uint8_t { LONG = 0, DOUBLE, CODE, POINT };
+enum TMServiceMessageType : uint8_t {
+  EMPTY = 0,
+  SESSION_BEGIN,
+  CUR_TIME,
+  SESSION_END,
+  MODE_CHANGE,
+  ERROR = 6
+};
 
 struct ServiceMessage {
   uint8_t message_type;
@@ -13,7 +24,12 @@ struct ServiceMessage {
   union {
     struct {
       uint16_t len;
-      uint8_t message;
+      char board_name[4];
+      uint8_t board_n;
+      char coil_n[5];
+      char data_name[8];
+      uint8_t n_ver1;
+      uint8_t n_ver2;
     } session_begin;
     uint32_t current_time;
     char session_end[4];
@@ -74,7 +90,8 @@ class Stream {
     is.read(buff, 4);
     v = (buff[0] << 24) | (buff[1] << 16) | (buff[2] << 8) | buff[3];
   }
-
+  void read_arr(char*buff, long n) { is.read(buff, n); }
+  
   void skip(long n) { is.seekg(n, std::ios::cur); }
 
  private:
@@ -97,7 +114,46 @@ class TMRecordReader {
   }
 
  private:
-  void read_service_message(ServiceMessage& record) { throw std::logic_error("read_service_message() is not implemented"); }
+  void read_service_message(ServiceMessage& message) { 
+    stream.read(message.message_type);
+    stream.read(message.value_type);
+    
+    uint8_t buff[4];
+    switch (message.message_type) {
+      case TMServiceMessageType::EMPTY:
+        stream.skip(8);
+        break;
+      case TMServiceMessageType::SESSION_BEGIN:
+        stream.skip(2);
+        stream.read(message.session_begin.len);
+        stream.read_arr(message.session_begin.board_name, sizeof(message.session_begin.board_name));
+        stream.read(message.session_begin.board_n);
+        stream.read_arr(message.session_begin.coil_n, sizeof(message.session_begin.coil_n));
+        stream.read_arr(message.session_begin.data_name, sizeof(message.session_begin.data_name));
+        stream.read(message.session_begin.n_ver1);
+        stream.read(message.session_begin.n_ver2);
+        break;
+      case TMServiceMessageType::CUR_TIME:
+        stream.read(message.current_time);
+        stream.skip(4);
+        break;
+      case TMServiceMessageType::SESSION_END:
+        stream.skip(4);
+        stream.read(buff);
+        assert(memcmp(buff, "END!", sizeof(buff)) == 0);
+        break;
+      case TMServiceMessageType::MODE_CHANGE:
+        stream.skip(4);
+        stream.read(message.mode_n);
+        break;
+      case TMServiceMessageType::ERROR:
+        stream.skip(4);
+        stream.read(message.error_n);
+        break;
+      default:
+        throw std::logic_error("Invalid file format. Can't detect message type.");
+    }
+  }
 
   void read_plain_message(PlainMessage& message) {
     stream.read(message.dim);
@@ -144,13 +200,15 @@ std::istream& operator>>(std::istream& is, TMRecord& rec) {
 }
 
 auto main() -> int {
-  std::ifstream ifs("06lab/test.KNP", std::ios::in | std::ios::binary);
+  std::ifstream ifs("06lab/190829_v29854.KNP", std::ios::in | std::ios::binary);
   if (!ifs) {
     std::cerr << "ifs\n";
     return EXIT_FAILURE;
   }
   TMRecord tm{};
-  ifs >> tm;
-  std::cout << tm.par_n;
+  for( int i= 0; i < 10; ++i) {
+    ifs >> tm;
+    std::cout << tm.par_n << '\n';
+  }
   return EXIT_SUCCESS;
 }
