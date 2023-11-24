@@ -1,22 +1,16 @@
+#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <fstream>
 #include <ios>
 #include <iostream>
 #include <istream>
-#include <cassert>
 #include <stdexcept>
 
 enum TMRecordType : uint8_t { LONG = 0, DOUBLE, CODE, POINT };
-enum TMServiceMessageType : uint8_t {
-  EMPTY = 0,
-  SESSION_BEGIN,
-  CUR_TIME,
-  SESSION_END,
-  MODE_CHANGE,
-  ERROR = 6
-};
+enum TMServiceMessageType : uint8_t { EMPTY = 0, SESSION_BEGIN, CUR_TIME, SESSION_END, MODE_CHANGE, ERROR = 6 };
 
 struct ServiceMessage {
   uint8_t message_type;
@@ -70,29 +64,19 @@ class Stream {
  public:
   explicit Stream(std::istream& is_) : is(is_) {}
 
-  template <class T>
-  void read(T& buff) {
-    is >> buff;
+  template <typename T, bool _littleEndian = std::is_integral_v<T>,
+            std::enable_if<std::is_integral_v<std::decay<T>>>* = nullptr>
+  void read(T& v) {
+    auto buff = reinterpret_cast<char*>(&v);
+    is.read(buff, sizeof(T));
+    if constexpr (_littleEndian) {
+      const size_t size = sizeof(T);
+      for (size_t i = 0; i < size / 2; ++i) std::swap(buff[i], buff[size - 1 - i]);
+    }
   }
-  template <>
-  void read(uint8_t& v) {
-    is >> v;
-  }
-  template <>
-  void read(uint16_t& v) {
-    char buff[2];
-    is.read(buff, 2);
-    v = (buff[0] << 8) | buff[1];
-  }
-  template <>
-  void read(uint32_t& v) {
-    char buff[4];
-    is.read(buff, 4);
-    v = (buff[0] << 24) | (buff[1] << 16) | (buff[2] << 8) | buff[3];
-  }
-  void read_arr(char*buff, long n) { is.read(buff, n); }
-  
+
   void skip(long n) { is.seekg(n, std::ios::cur); }
+  long off() const { return is.tellg(); }
 
  private:
   std::istream& is;
@@ -114,10 +98,11 @@ class TMRecordReader {
   }
 
  private:
-  void read_service_message(ServiceMessage& message) { 
+  void read_service_message(ServiceMessage& message) {
     stream.read(message.message_type);
+    long off = stream.off();
     stream.read(message.value_type);
-    
+
     uint8_t buff[4];
     switch (message.message_type) {
       case TMServiceMessageType::EMPTY:
@@ -126,13 +111,15 @@ class TMRecordReader {
       case TMServiceMessageType::SESSION_BEGIN:
         stream.skip(2);
         stream.read(message.session_begin.len);
-        stream.read_arr(message.session_begin.board_name, sizeof(message.session_begin.board_name));
+        stream.read(message.session_begin.board_name);
         stream.read(message.session_begin.board_n);
-        stream.read_arr(message.session_begin.coil_n, sizeof(message.session_begin.coil_n));
-        stream.read_arr(message.session_begin.data_name, sizeof(message.session_begin.data_name));
+        stream.read(message.session_begin.coil_n);
+        stream.read(message.session_begin.data_name);
         stream.read(message.session_begin.n_ver1);
         stream.read(message.session_begin.n_ver2);
         break;
+      case 5:  // Unknown message type. Looks like time
+        [[fallthrough]];
       case TMServiceMessageType::CUR_TIME:
         stream.read(message.current_time);
         stream.skip(4);
@@ -151,7 +138,8 @@ class TMRecordReader {
         stream.read(message.error_n);
         break;
       default:
-        throw std::logic_error("Invalid file format. Can't detect message type.");
+        throw std::logic_error(std::format("Invalid file format. Can't detect service message type. Got {} at 0x{:x}",
+                                           message.message_type, off));
     }
   }
 
@@ -159,32 +147,32 @@ class TMRecordReader {
     stream.read(message.dim);
     uint8_t buff;
     stream.read(buff);
-    message.attr = buff & 0xf0;
-    message.type = buff & 0x0f;
+    long off = stream.off();
+    message.attr = buff & 0x0f;
+    message.type = buff & 0xf0;
 
     switch (message.type) {
-    case TMRecordType::LONG:
-      stream.skip(4);
-      stream.read(message.long_);
-      break;
-    case TMRecordType::DOUBLE:
-      stream.read(message.double_);
-      break;
-    case TMRecordType::CODE:
-      stream.skip(1);
-      stream.read(message.code.length);
-      stream.read(message.code.value);
-      break;
-    case TMRecordType::POINT:
-      stream.read(message.point.size);
-      stream.read(message.point.length);
-      for (int i = 0; i < std::min(message.point.length, uint16_t(4)); ++i)
-        stream.read(message.point.bytes[i]);
-      if (message.point.length > 4)
-        stream.skip(message.point.length - 4);
-      break;
-    default:
-      throw std::logic_error("Invalid file format. Can't detect message type.");
+      case TMRecordType::LONG:
+        stream.skip(4);
+        stream.read(message.long_);
+        break;
+      case TMRecordType::DOUBLE:
+        stream.read(message.double_);
+        break;
+      case TMRecordType::CODE:
+        stream.skip(1);
+        stream.read(message.code.length);
+        stream.read(message.code.value);
+        break;
+      case TMRecordType::POINT:
+        stream.read(message.point.size);
+        stream.read(message.point.length);
+        stream.read(message.point.bytes);
+        if (message.point.length > 4) stream.skip(message.point.length - 4);
+        break;
+      default:
+        throw std::logic_error(std::format("Invalid file format. Can't detect plain message type. Got {} at 0x{:x}",
+                                           int(message.type), off));
     }
   }
 
@@ -206,9 +194,6 @@ auto main() -> int {
     return EXIT_FAILURE;
   }
   TMRecord tm{};
-  for( int i= 0; i < 10; ++i) {
-    ifs >> tm;
-    std::cout << tm.par_n << '\n';
-  }
+  while (ifs >> tm) std::cout << tm.par_n << '\n';
   return EXIT_SUCCESS;
 }
