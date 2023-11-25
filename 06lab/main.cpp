@@ -1,7 +1,7 @@
 #include <cassert>
-#include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <ios>
@@ -52,6 +52,8 @@ struct PlainMessage {
 };
 
 struct TMRecord {
+  inline static constexpr uint16_t SERVICE_TAG = 0xffff;
+
   uint16_t par_n;
   uint32_t time_ms;
   union {
@@ -83,15 +85,13 @@ class Stream {
 };
 
 class TMRecordReader {
-  inline static constexpr uint16_t SERVICE_TAG = 0xffff;
-
  public:
   explicit TMRecordReader(Stream& stream_) : stream(stream_) {}
 
-  void read(TMRecord& record) noexcept {
+  void read(TMRecord& record) {
     stream.read(record.par_n);
     stream.read(record.time_ms);
-    if (record.par_n == TMRecordReader::SERVICE_TAG)
+    if (record.par_n == TMRecord::SERVICE_TAG)
       read_service_message(record.service);
     else
       read_plain_message(record.plain);
@@ -187,13 +187,61 @@ std::istream& operator>>(std::istream& is, TMRecord& rec) {
   return is;
 }
 
-auto main() -> int {
-  std::ifstream ifs("06lab/190829_v29854.KNP", std::ios::in | std::ios::binary);
+auto format_plain_value(const PlainMessage& msg) {
+  switch (msg.type) {
+    case TMRecordType::LONG:
+      return std::format("{}", msg.long_);
+    case TMRecordType::DOUBLE:
+      return std::format("{}", msg.double_);
+    case TMRecordType::CODE:
+      return std::format("Len={}, Value={}", msg.code.length, msg.code.value);
+    case TMRecordType::POINT:
+      return std::format("ItemSize={} Length={} Bytes=0x{:X} 0x{:X} 0x{:X} 0x{:X}", msg.point.size, msg.point.length,
+                         msg.point.bytes[0], msg.point.bytes[1], msg.point.bytes[2], msg.point.bytes[3]);
+    default:
+      assert(false);
+  }
+}
+
+constexpr auto fmt = R"""(Parameter n: {}
+Time: {}
+Dimension n: {}
+Attribute n: {}
+Value type: {}
+Value: {}
+)""";
+
+std::ostream& operator<<(std::ostream& os, const TMRecord& rec) {
+  if (rec.par_n == TMRecord::SERVICE_TAG) return (os << "<Service message (no details)>");
+  const auto s = std::format(fmt, rec.par_n, rec.time_ms, rec.plain.dim, int(rec.plain.attr), int(rec.plain.type),
+                             format_plain_value(rec.plain));
+  return (os << s);
+}
+
+int run(const std::filesystem::path& path) {
+  std::ifstream ifs(path, std::ios::in | std::ios::binary);
   if (!ifs) {
-    std::cerr << "ifs\n";
+    std::cerr << "Error while opening " << path.string();
     return EXIT_FAILURE;
   }
+
   TMRecord tm{};
-  while (ifs >> tm) std::cout << tm.par_n << '\n';
+  try {
+    while (ifs >> tm) {
+      if (tm.par_n == TMRecord::SERVICE_TAG)
+        continue;
+      std::cout << tm << "\n";
+    }
+  } catch (const std::exception& exc) {
+    std::cerr << exc.what() << '\n';
+    std::cerr << std::format("File processing '{}' stopped at 0x{:X}", path.string(), long(ifs.tellg()));
+    return EXIT_FAILURE;
+  }
   return EXIT_SUCCESS;
+}
+
+auto main(int argc, char** argv) -> int {
+  std::filesystem::path p = "06lab/190829_v29854.KNP";
+  if (argc == 2) p = argv[1];
+  return run(p);
 }
