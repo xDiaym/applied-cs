@@ -99,6 +99,8 @@ class TMRecordReader {
 
  private:
   void read_service_message(ServiceMessage& message) {
+    stream.skip(16);
+    /*
     stream.read(message.message_type);
     long off = stream.off();
     stream.read(message.value_type);
@@ -141,6 +143,7 @@ class TMRecordReader {
         throw std::logic_error(std::format("Invalid file format. Can't detect service message type. Got {} at 0x{:x}",
                                            message.message_type, off));
     }
+    */
   }
 
   void read_plain_message(PlainMessage& message) {
@@ -160,7 +163,7 @@ class TMRecordReader {
         stream.read(message.double_);
         break;
       case TMRecordType::CODE:
-        stream.skip(1);
+        stream.skip(2);
         stream.read(message.code.length);
         stream.read(message.code.value);
         break;
@@ -230,7 +233,8 @@ int run(const std::filesystem::path& path) {
     while (ifs >> tm) {
       if (tm.par_n == TMRecord::SERVICE_TAG)
         continue;
-      std::cout << tm << "\n";
+      printf("%.2lf MB\n", double(ifs.tellg()) / 1024 / 1024);
+      // std::cout << tm << "\n";
     }
   } catch (const std::exception& exc) {
     std::cerr << exc.what() << '\n';
