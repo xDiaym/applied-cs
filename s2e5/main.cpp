@@ -16,6 +16,9 @@ class Tree {
   };
   Node* root = nullptr;
 
+  expr ::= 'a' | 'b' ...
+  op ::= + | - | / | *
+  expr ::= '(' expr op expr ')'
   Node* parse(std::string_view s, int& pos) {
     if (isalnum(s[pos])) {
       return new Node(s[pos++]);
